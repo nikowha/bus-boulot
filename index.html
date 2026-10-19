@@ -1,0 +1,508 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Horaires Metlink</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+  :root {
+    --bg: #f4f5f2; --card: #ffffff; --ink: #1c1f1d; --muted: #6b716d; --line: #e2e4e0;
+    --accent: #0b6b3a; --late: #b4570b; --cancel: #b3261e; --early: #1f5fae;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #121413; --card: #1c1f1d; --ink: #eef0ec; --muted: #9aa19c; --line: #2c302d;
+      --accent: #4cc285; --late: #f0a050; --cancel: #ff7a70; --early: #7fb0f0; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 900px; margin: 0 auto; padding: 16px; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  h1 { font-size: 1.4rem; margin: 8px 0; }
+  .sub { color: var(--muted); font-size: .85rem; }
+  button, input { font: inherit; color: inherit; }
+  input { width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); }
+  button { padding: 10px 14px; border: 0; border-radius: 8px; background: var(--accent); color: #fff; cursor: pointer; white-space: nowrap; }
+  button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--line); }
+  .row { display: flex; gap: 8px; margin: 8px 0; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
+  details { margin: 8px 0 12px; }
+  details summary { cursor: pointer; color: var(--muted); font-size: .9rem; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 520px) { .cols { gap: 8px; } .card { padding: 10px; } }
+  .col h2 { font-size: 1.15rem; margin: 0; }
+  .col .sub { margin-bottom: 6px; }
+  .dep { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: center;
+    padding: 10px 0; border-top: 1px solid var(--line); }
+  .route { font-weight: 700; min-width: 40px; text-align: center; padding: 4px 6px; border-radius: 6px; background: var(--accent); color: #fff; }
+  .dest { font-weight: 600; font-size: .9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .meta { color: var(--muted); font-size: .78rem; }
+  .info { min-width: 0; }
+  .mins { font-size: 1.25rem; font-weight: 700; font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+  .late { color: var(--late); } .cancel { color: var(--cancel); } .early { color: var(--early); }
+  .dep.cancelled .dest, .dep.cancelled .mins { text-decoration: line-through; opacity: .6; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; }
+  .chip { padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); color: var(--ink); font-size: .8rem; }
+  .chip.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+  .dep { cursor: pointer; }
+  .dep.sel { background: var(--bg); border-radius: 8px; }
+  #mapCard { margin-top: 12px; }
+  .maphead { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .maptitle { font-weight: 700; }
+  #map { height: 360px; border-radius: 8px; }
+  .busicon { position: relative; }
+  .busicon svg { position: absolute; inset: 0; filter: drop-shadow(0 1px 2px rgba(0,0,0,.5)); }
+  .busicon .num { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    color: #fff; font: 700 12px system-ui, sans-serif; }
+  .msg { color: var(--muted); padding: 16px 0; text-align: center; font-size: .9rem; }
+  .err { color: var(--cancel); }
+  @media (max-width: 520px) {
+    .dep { grid-template-columns: 1fr auto; }
+    .route { grid-column: 1; justify-self: start; }
+    .mins { grid-column: 2; grid-row: 1; }
+    .info { grid-column: 1 / -1; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Prochains bus</h1>
+    <button class="ghost" id="refreshBtn" title="Rafraîchir">↻</button>
+  </header>
+
+  <details id="keyBox">
+    <summary>Clé API Metlink</summary>
+    <p class="sub">Gratuite sur <a href="https://opendata.metlink.org.nz/" target="_blank" rel="noopener">opendata.metlink.org.nz</a>. Stockée uniquement dans ce navigateur.</p>
+    <div class="row">
+      <input id="keyInput" type="password" placeholder="x-api-key" autocomplete="off">
+      <button id="keySave">Enregistrer</button>
+    </div>
+  </details>
+
+  <div class="cols" id="cols"></div>
+
+  <section class="card" id="mapCard" hidden>
+    <div class="maphead">
+      <div>
+        <div class="maptitle" id="mapTitle"></div>
+        <div class="sub" id="mapEta"></div>
+        <div class="sub" id="mapSub"></div>
+      </div>
+      <button class="ghost" id="mapClose" title="Fermer">✕</button>
+    </div>
+    <div id="map"></div>
+  </section>
+
+  <p class="sub" id="updated"></p>
+</main>
+
+<script>
+// ---------- Configuration ----------
+const API = "https://api.opendata.metlink.org.nz/v1";
+const REFRESH_MS = 5000;
+const MAX_DEPARTURES = 4;
+const STOPS = [
+  { id: "6080", label: "WETA", lat: -41.31498596, lon: 174.8131054 },
+  { id: "7096", label: "MAISON", lat: -41.3343386, lon: 174.8196172 },
+];
+const VEHICLE_REFRESH_MS = 5000;  // le flux GPS Metlink se met à jour environ toutes les 5 s
+const $ = (id) => document.getElementById(id);
+
+// ---------- Stockage local (tolérant aux erreurs) ----------
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+};
+
+let apiKey = store.get("metlink_key") || "";
+let timer = null;
+const filters = {};  // ligne choisie par arrêt ("" = toutes)
+const lastData = {}; // derniers départs reçus, par arrêt
+let routesByShort = null;  // "4" -> { route_id, route_color, ... }
+const shapeCache = {};     // trip_id -> [[lat, lon], ...]
+
+// ---------- Colonnes ----------
+$("cols").innerHTML = STOPS.map(s => `
+  <section class="card col">
+    <h2>${s.id} - ${s.label}</h2>
+    <div class="sub" id="name-${s.id}">&nbsp;</div>
+    <div class="chips" id="chips-${s.id}"></div>
+    <div id="board-${s.id}"><div class="msg">Chargement…</div></div>
+  </section>`).join("");
+
+// ---------- Appels API ----------
+async function api(path) {
+  if (!apiKey) throw new Error("Ajoute ta clé API Metlink.");
+  const r = await fetch(API + path, { headers: { "x-api-key": apiKey, accept: "application/json" } });
+  if (r.status === 403) throw new Error("Clé API refusée (403).");
+  if (!r.ok) throw new Error("Erreur Metlink " + r.status);
+  return r.json();
+}
+
+async function refresh() {
+  clearTimeout(timer);
+  // Page cachée (autre onglet, écran éteint) : pas de requête, on reprend au retour
+  if (document.hidden) { timer = setTimeout(refresh, REFRESH_MS); return; }
+  if (!routesByShort && apiKey) await loadRoutes().catch(() => {});
+  await Promise.all(STOPS.map(loadStop));
+  if (selected) updateMapHeader();
+  $("updated").textContent = "Mis à jour à " + new Date().toLocaleTimeString("fr-FR") + ` · rafraîchi toutes les ${REFRESH_MS / 1000} s`;
+  timer = setTimeout(refresh, REFRESH_MS);
+}
+
+async function loadStop(stop) {
+  const board = $("board-" + stop.id);
+  try {
+    const data = await api("/stop-predictions?stop_id=" + stop.id);
+    lastData[stop.id] = data;
+    render(stop, data);
+  } catch (e) {
+    board.innerHTML = `<div class="msg err">${esc(e.message)}</div>`;
+  }
+}
+
+// ---------- Affichage d'un arrêt ----------
+function render(stop, data) {
+  const all = data.departures || [];
+  $("name-" + stop.id).textContent = (all[0]?.name || "") + (data.closed ? " · FERMÉ" : "");
+
+  // Filtre par ligne (mémorisé par arrêt)
+  const routes = [...new Set(all.map(d => d.service_id))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  const filterKey = "metlink_filter_" + stop.id;
+  if (!(stop.id in filters)) filters[stop.id] = store.get(filterKey) || "";
+  const only = filters[stop.id];
+  if (only && !routes.includes(only)) routes.push(only);
+  const chips = $("chips-" + stop.id);
+  chips.innerHTML = "";
+  for (const r of ["", ...routes]) {
+    const b = document.createElement("button");
+    b.className = "chip" + (only === r ? " on" : "");
+    b.textContent = r || "Toutes";
+    b.onclick = () => { filters[stop.id] = r; store.set(filterKey, r); render(stop, data); };
+    chips.appendChild(b);
+  }
+
+  const deps = all.filter(d => !only || d.service_id === only).slice(0, MAX_DEPARTURES);
+  const board = $("board-" + stop.id);
+  if (!deps.length) { board.innerHTML = `<div class="msg">Aucun départ prévu${only ? " pour la ligne " + esc(only) : ""}.</div>`; return; }
+
+  board.innerHTML = deps.map(d => {
+    const tm = timing(d);
+    const big = tm.cancelled ? "—" : tm.mins <= 0 ? "Maint." : tm.mins < 60 ? `${tm.mins} min` : fmt(tm.time);
+    const isSel = selected && selected.stopId === stop.id && selected.tripId === d.trip_id;
+    return `<div class="dep${tm.cancelled ? " cancelled" : ""}${isSel ? " sel" : ""}" data-stop="${stop.id}" data-trip="${esc(d.trip_id)}">
+      <div class="route" style="${routeStyle(d.service_id)}">${esc(d.service_id)}</div>
+      <div class="info">
+        <div class="dest">${esc(d.trip_headsign || d.destination?.name || "")}</div>
+        <div class="meta">${tm.html}</div>
+      </div>
+      <div class="mins ${tm.cls}">${big}</div>
+    </div>`;
+  }).join("");
+}
+
+// Horaires d'un départ : heure prévue · retard/avance · nouvelle heure
+function timing(d) {
+  const aimedIso = d.arrival?.aimed || d.departure?.aimed;
+  const expectedIso = d.arrival?.expected || d.departure?.expected;
+  const aimed = new Date(aimedIso);
+  const time = new Date(expectedIso || aimedIso);
+  const status = (d.status || "").toLowerCase();
+  const cancelled = status === "cancelled" || status === "canceled";
+  const mins = Math.round((time - Date.now()) / 60000);
+
+  let html, cls = "";
+  if (cancelled) {
+    cls = "cancel";
+    html = `${fmt(aimed)} · <span class="cancel">annulé</span>`;
+  } else if (!expectedIso) {
+    html = `${fmt(aimed)} · prévu, pas de temps réel`;
+  } else {
+    const delay = Math.round((time - aimed) / 60000);
+    if (delay >= 2) cls = "late"; else if (delay <= -1) cls = "early";
+    const txt = delay > 0 ? `+${delay} min` : delay < 0 ? `${delay} min` : "0 min";
+    html = `${fmt(aimed)} · <span class="${cls}">${txt}</span> · <b class="${cls}">${fmt(time)}</b>`;
+  }
+  return { time, mins, cancelled, cls, html };
+}
+
+// ---------- Lignes (couleurs officielles) ----------
+async function loadRoutes() {
+  const routes = await api("/gtfs/routes");
+  routesByShort = {};
+  for (const r of routes) routesByShort[r.route_short_name] = r;
+}
+
+function routeStyle(short) {
+  const r = routesByShort?.[short];
+  return r?.route_color ? `background:#${r.route_color};color:#${r.route_text_color || "fff"}` : "";
+}
+
+// ---------- Carte ----------
+let selected = null;  // { stopId, tripId, service, vehicleId }
+let map = null, busLayer = null, stopLayer = null, shapeLayer = null, vehTimer = null;
+
+// Ouvre la carte pour un départ cliqué
+async function openMap(stopId, tripId) {
+  const dep = (lastData[stopId]?.departures || []).find(d => d.trip_id === tripId);
+  if (!dep) return;
+  const stop = STOPS.find(s => s.id === stopId);
+  selected = { stopId, tripId, service: dep.service_id, vehicleId: dep.vehicle_id };
+  STOPS.forEach(s => lastData[s.id] && render(s, lastData[s.id]));
+
+  $("mapCard").hidden = false;
+  if (!map) {
+    map = L.map("map", { zoomControl: true });
+    // Tuiles Esri (sans clé) — version sombre si le téléphone est en mode sombre
+    const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+    const layer = dark ? "Canvas/World_Dark_Gray_Base" : "World_Street_Map";
+    L.tileLayer(`https://server.arcgisonline.com/ArcGIS/rest/services/${layer}/MapServer/tile/{z}/{y}/{x}`, {
+      maxZoom: dark ? 16 : 19,
+      attribution: "Tiles © Esri",
+    }).addTo(map);
+  }
+  map.invalidateSize();
+  stopTracking();
+  [busLayer, stopLayer, shapeLayer].forEach(l => l && l.remove());
+  busLayer = shapeLayer = null;
+  stopLayer = L.circleMarker([stop.lat, stop.lon], { radius: 8, color: "#fff", weight: 3, fillColor: "#1c1f1d", fillOpacity: 1 })
+    .bindTooltip(`${stop.id} - ${stop.label}`).addTo(map);
+  map.setView([stop.lat, stop.lon], 15);
+  updateMapHeader();
+  $("mapCard").scrollIntoView({ behavior: "smooth", block: "nearest" });
+
+  // Le tracé d'abord (en parallèle du GPS) pour que le bus puisse le suivre dès le départ
+  const shapeReady = loadShape(dep).catch(() => {});
+  await Promise.race([shapeReady, new Promise(r => setTimeout(r, 3000))]);
+  await updateVehicle(true);
+}
+
+// Met à jour le titre de la carte (temps restant)
+function updateMapHeader() {
+  const dep = (lastData[selected.stopId]?.departures || []).find(d => d.trip_id === selected.tripId);
+  const stop = STOPS.find(s => s.id === selected.stopId);
+  $("mapTitle").textContent = `Ligne ${selected.service} → ${dep?.trip_headsign || dep?.destination?.name || ""}`;
+  if (dep) {
+    const tm = timing(dep);
+    const when = tm.cancelled ? "" : ` (${tm.mins <= 0 ? "maintenant" : "dans " + tm.mins + " min"})`;
+    $("mapEta").innerHTML = `À ${esc(stop.label)} : ${tm.html}${when}`;
+  } else {
+    $("mapEta").textContent = `Bus passé à ${stop.label}`;
+  }
+}
+
+// Dessine le tracé de la ligne pour cette course
+async function loadShape(dep) {
+  let pts = shapeCache[dep.trip_id];
+  if (!pts) {
+    const route = routesByShort?.[dep.service_id];
+    if (!route) return;
+    const trips = await api("/gtfs/trips?route_id=" + encodeURIComponent(route.route_id));
+    const trip = trips.find(t => t.trip_id === dep.trip_id);
+    if (!trip?.shape_id) return;
+    const shape = await api("/gtfs/shapes?shape_id=" + encodeURIComponent(trip.shape_id));
+    pts = shape.sort((a, b) => a.shape_pt_sequence - b.shape_pt_sequence).map(p => [p.shape_pt_lat, p.shape_pt_lon]);
+    shapeCache[dep.trip_id] = pts;
+  }
+  if (selected?.tripId !== dep.trip_id || pts.length < 2) return;
+  track = buildTrack(dep.trip_id, pts);
+  const color = routesByShort?.[dep.service_id]?.route_color;
+  shapeLayer = L.polyline(pts, { color: color ? "#" + color : "#0b6b3a", weight: 5, opacity: .7 }).addTo(map);
+  shapeLayer.bringToBack();
+}
+
+// ---------- Tracé : distances le long de la ligne ----------
+// Prépare le tracé pour pouvoir y projeter le bus (coordonnées en mètres, distances cumulées)
+function buildTrack(tripId, pts) {
+  const lat0 = pts[0][0], k = Math.cos(lat0 * Math.PI / 180);
+  const xy = pts.map(([la, lo]) => [(lo - pts[0][1]) * 111320 * k, (la - lat0) * 110540]);
+  const cum = [0];
+  for (let i = 1; i < xy.length; i++) cum.push(cum[i - 1] + Math.hypot(xy[i][0] - xy[i - 1][0], xy[i][1] - xy[i - 1][1]));
+  const toXY = (la, lo) => [(lo - pts[0][1]) * 111320 * k, (la - lat0) * 110540];
+  return { tripId, pts, xy, cum, toXY };
+}
+
+// Distance le long du tracé du point le plus proche (null si le bus est à plus de 80 m du tracé)
+function projectOnTrack(t, lat, lon, minD = -Infinity, maxD = Infinity) {
+  const [px, py] = t.toXY(lat, lon);
+  let best = null;
+  for (let i = 0; i < t.xy.length - 1; i++) {
+    if (t.cum[i + 1] < minD || t.cum[i] > maxD) continue;
+    const [ax, ay] = t.xy[i], [bx, by] = t.xy[i + 1];
+    const dx = bx - ax, dy = by - ay, len2 = dx * dx + dy * dy;
+    const u = len2 ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / len2)) : 0;
+    const off = Math.hypot(ax + u * dx - px, ay + u * dy - py);
+    if (!best || off < best.off) best = { off, dist: t.cum[i] + u * (t.cum[i + 1] - t.cum[i]) };
+  }
+  return best && best.off <= 80 ? best.dist : null;
+}
+
+// Position et cap à une distance donnée le long du tracé
+function pointOnTrack(t, d) {
+  const c = t.cum, n = c.length - 1;
+  d = Math.max(0, Math.min(c[n], d));
+  let lo = 0, hi = n;
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; if (c[m] <= d) lo = m; else hi = m; }
+  const u = c[hi] > c[lo] ? (d - c[lo]) / (c[hi] - c[lo]) : 0;
+  const [a, b] = [t.pts[lo], t.pts[hi]];
+  const [ax, ay] = t.xy[lo], [bx, by] = t.xy[hi];
+  const bearing = (Math.atan2(bx - ax, by - ay) * 180 / Math.PI + 360) % 360;
+  return { latlng: [a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u], bearing };
+}
+
+// ---------- Suivi du bus ----------
+let track = null;      // tracé de la course suivie
+let fix = null;        // dernière position GPS : { time, dist (sur le tracé) ou raw [lat, lon], speed m/s }
+let shownDist = null;  // distance actuellement affichée le long du tracé
+let animFrame = null, lastFrame = 0, shownBearing = null;
+
+// Icône : rond centré pile sur la position, petite flèche qui tourne selon le cap
+function busIcon(service) {
+  const color = routesByShort?.[service]?.route_color || "0b6b3a";
+  return L.divIcon({
+    className: "busicon", iconSize: [44, 44], iconAnchor: [22, 22],
+    html: `<svg viewBox="0 0 44 44" width="44" height="44">
+        <g class="dir"><path d="M22 1 L28 9 L16 9 Z" fill="#${color}" stroke="#fff" stroke-width="1.5"/></g>
+        <circle cx="22" cy="22" r="13" fill="#${color}" stroke="#fff" stroke-width="2.5"/>
+      </svg><span class="num">${esc(service)}</span>`,
+  });
+}
+
+function setBearing(deg) {
+  if (deg == null || (shownBearing != null && Math.abs(((deg - shownBearing + 540) % 360) - 180) < 3)) return;
+  shownBearing = deg;
+  busLayer?.getElement()?.querySelector(".dir")?.setAttribute("transform", `rotate(${deg} 22 22)`);
+}
+
+// Récupère la position GPS du bus et met à jour le suivi
+async function updateVehicle(fit) {
+  clearTimeout(vehTimer);
+  if (!selected) return;
+  const sel = selected;
+  if (document.hidden) { vehTimer = setTimeout(() => updateVehicle(false), VEHICLE_REFRESH_MS); return; }
+  try {
+    const feed = await api("/gtfs-rt/vehiclepositions");
+    if (selected !== sel) return;
+    const ent = (feed.entity || []).find(e =>
+      e.vehicle?.trip?.trip_id === sel.tripId || (sel.vehicleId && e.vehicle?.vehicle?.id === sel.vehicleId));
+    if (!ent) {
+      $("mapSub").textContent = "Position GPS indisponible (bus pas encore parti ?)";
+      busLayer?.remove(); busLayer = null; fix = null;
+    } else {
+      const p = ent.vehicle.position;
+      const ts = (ent.vehicle.timestamp || feed.header?.timestamp || Date.now() / 1000) * 1000;
+      onFix(p.latitude, p.longitude, ts, p.bearing, sel);
+      const age = Math.max(0, Math.round((Date.now() - ts) / 1000));
+      const kmh = fix?.speed != null && fix.dist != null ? ` · ≈ ${Math.round(fix.speed * 3.6)} km/h` : "";
+      $("mapSub").textContent = `GPS il y a ${age} s${kmh}`;
+      if (fit) {
+        const stop = STOPS.find(s => s.id === sel.stopId);
+        map.fitBounds(L.latLngBounds([[p.latitude, p.longitude], [stop.lat, stop.lon]]), { padding: [40, 40], maxZoom: 16 });
+      }
+    }
+  } catch (e) {
+    $("mapSub").textContent = e.message;
+  }
+  vehTimer = setTimeout(() => updateVehicle(false), VEHICLE_REFRESH_MS);
+}
+
+// Nouvelle position GPS : projection sur le tracé et estimation de la vitesse
+function onFix(lat, lon, ts, gpsBearing, sel) {
+  if (fix && fix.time === ts) return;  // pas de nouvelle donnée
+  const t = track?.tripId === sel.tripId ? track : null;
+  let dist = null;
+  if (t) {
+    // Près de la dernière position connue d'abord (évite de sauter sur un autre passage du tracé)
+    if (fix?.dist != null) dist = projectOnTrack(t, lat, lon, fix.dist - 200, fix.dist + 3000);
+    if (dist == null) dist = projectOnTrack(t, lat, lon);
+  }
+  if (dist != null) {
+    let speed = fix?.speed ?? null;  // inconnue tant qu'on n'a pas deux positions
+    if (fix?.dist != null) {
+      const dt = (ts - fix.time) / 1000;
+      if (dt >= 3) {
+        const v = Math.max(0, Math.min(22, (dist - fix.dist) / dt));
+        speed = fix.speed == null ? v : 0.5 * fix.speed + 0.5 * v;
+      }
+    }
+    fix = { time: ts, dist, speed };
+    if (shownDist == null || Math.abs(shownDist - dist) > 600) shownDist = dist;
+  } else {
+    fix = { time: ts, raw: [lat, lon], bearing: gpsBearing };
+  }
+  if (!busLayer) {
+    const start = dist != null ? pointOnTrack(t, dist).latlng : [lat, lon];
+    busLayer = L.marker(start, { icon: busIcon(sel.service), zIndexOffset: 1000 }).addTo(map);
+    shownBearing = null;
+  }
+  if (!animFrame) { lastFrame = performance.now(); animFrame = requestAnimationFrame(animate); }
+}
+
+// Animation continue : le bus avance le long du tracé à sa vitesse estimée,
+// en partant de la dernière position GPS (compense le retard du GPS)
+function animate(now) {
+  animFrame = null;
+  if (!selected || !busLayer || !fix) return;
+  const dt = Math.min(0.5, (now - lastFrame) / 1000);
+  lastFrame = now;
+  const ease = Math.min(1, dt / 1.5);  // rattrapage en douceur (~1,5 s)
+
+  if (fix.dist != null && track) {
+    const elapsed = Math.min(40, Math.max(0, (Date.now() - fix.time) / 1000));
+    const target = fix.dist + Math.min(300, (fix.speed || 0) * elapsed);
+    const diff = target - shownDist;
+    // Petit recul : on attend sur place plutôt que de faire reculer le bus
+    if (diff > 0 || diff < -150) shownDist += diff * ease;
+    const p = pointOnTrack(track, shownDist);
+    busLayer.setLatLng(p.latlng);
+    setBearing(p.bearing);
+  } else if (fix.raw) {
+    // Pas de tracé : on glisse en ligne droite vers la position GPS
+    const cur = busLayer.getLatLng();
+    busLayer.setLatLng([cur.lat + (fix.raw[0] - cur.lat) * ease, cur.lng + (fix.raw[1] - cur.lng) * ease]);
+    setBearing(fix.bearing);
+  }
+  animFrame = requestAnimationFrame(animate);
+}
+
+function stopTracking() {
+  cancelAnimationFrame(animFrame); animFrame = null;
+  clearTimeout(vehTimer);
+  track = fix = shownDist = shownBearing = null;
+}
+
+function closeMap() {
+  selected = null;
+  stopTracking();
+  $("mapCard").hidden = true;
+  STOPS.forEach(s => lastData[s.id] && render(s, lastData[s.id]));
+}
+
+// ---------- Utilitaires ----------
+function fmt(d) { return d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", timeZone: "Pacific/Auckland" }); }
+function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+
+// ---------- Événements ----------
+$("keyInput").value = apiKey;
+$("keyBox").open = !apiKey;
+$("keySave").onclick = () => {
+  apiKey = $("keyInput").value.trim();
+  store.set("metlink_key", apiKey);
+  $("keyBox").open = false;
+  refresh();
+};
+$("refreshBtn").onclick = refresh;
+$("cols").addEventListener("click", e => {
+  const row = e.target.closest(".dep");
+  if (row) openMap(row.dataset.stop, row.dataset.trip);
+});
+$("mapClose").onclick = closeMap;
+document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
+
+refresh();
+</script>
+</body>
+</html>
