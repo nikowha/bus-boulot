@@ -2,8 +2,18 @@
 <html lang="fr">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Horaires Metlink</title>
+<!-- Écran d'accueil iPhone : icône, nom court, plein écran -->
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" type="image/png" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Bus">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#f4f5f2" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#121413" media="(prefers-color-scheme: dark)">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <style>
@@ -18,7 +28,10 @@
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--ink);
     font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-  main { max-width: 900px; margin: 0 auto; padding: 16px; }
+  main { max-width: 900px; margin: 0 auto; padding: 16px;
+    /* plein écran iPhone : ne pas passer sous l'encoche ni la barre du bas */
+    padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right))
+             max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); }
   header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
   h1 { font-size: 1.4rem; margin: 8px 0; }
   .sub { color: var(--muted); font-size: .85rem; }
