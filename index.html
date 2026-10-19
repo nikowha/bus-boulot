@@ -56,6 +56,10 @@
   .mins { font-size: 1.25rem; font-weight: 700; font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
   .late { color: var(--late); } .cancel { color: var(--cancel); } .early { color: var(--early); }
   .dep.cancelled .dest, .dep.cancelled .mins { text-decoration: line-through; opacity: .6; }
+  #keyBox > details { margin-top: 12px; }
+  #keyBox textarea { width: 100%; margin: 8px 0; font: 12px ui-monospace, monospace; padding: 8px;
+    border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); }
+  #encKey { margin-top: 4px; }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; }
   .chip { padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); color: var(--ink); font-size: .8rem; }
   .chip.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
@@ -88,11 +92,36 @@
 
   <details id="keyBox">
     <summary>Clé API Metlink</summary>
-    <p class="sub">Gratuite sur <a href="https://opendata.metlink.org.nz/" target="_blank" rel="noopener">opendata.metlink.org.nz</a>. Stockée uniquement dans ce navigateur.</p>
+    <div id="unlockBox" hidden>
+      <p class="sub">Ta clé chiffrée est sur GitHub : entre ton mot de passe pour la déverrouiller sur cet appareil.</p>
+      <div class="row">
+        <input id="unlockPass" type="password" placeholder="Mot de passe" autocomplete="current-password">
+        <button id="unlockBtn">Déverrouiller</button>
+      </div>
+      <p class="sub" id="unlockMsg"></p>
+    </div>
+    <p class="sub">Ou colle la clé directement (gratuite sur <a href="https://opendata.metlink.org.nz/" target="_blank" rel="noopener">opendata.metlink.org.nz</a>). Elle est gardée uniquement dans ce navigateur.</p>
     <div class="row">
       <input id="keyInput" type="password" placeholder="x-api-key" autocomplete="off">
       <button id="keySave">Enregistrer</button>
     </div>
+    <div class="row">
+      <button class="ghost" id="keyForget">Oublier la clé sur cet appareil</button>
+    </div>
+    <details>
+      <summary>Chiffrer ma clé pour GitHub</summary>
+      <p class="sub">Tout se passe dans ce navigateur : ni la clé ni le mot de passe ne sont envoyés. Le résultat (illisible sans le mot de passe) va dans le fichier <code>key.enc.json</code> du dépôt.
+        Choisis un mot de passe long (12 caractères minimum, idéalement quelques mots au hasard), car le fichier chiffré est public.</p>
+      <input id="encKey" type="password" placeholder="Clé API Metlink" autocomplete="off">
+      <div class="row">
+        <input id="encPass" type="password" placeholder="Mot de passe" autocomplete="new-password">
+        <input id="encPass2" type="password" placeholder="Confirmer" autocomplete="new-password">
+      </div>
+      <button id="encBtn">Générer key.enc.json</button>
+      <p class="sub" id="encMsg"></p>
+      <textarea id="encOut" rows="5" readonly hidden></textarea>
+      <button class="ghost" id="encCopy" hidden>Copier</button>
+    </details>
   </details>
 
   <div class="cols" id="cols"></div>
@@ -494,6 +523,45 @@ function closeMap() {
   STOPS.forEach(s => lastData[s.id] && render(s, lastData[s.id]));
 }
 
+// ---------- Clé chiffrée par mot de passe (AES-GCM, clé dérivée PBKDF2) ----------
+const KDF_ITERATIONS = 600000;
+const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
+const unb64 = (s) => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+
+// Dérive une clé AES à partir du mot de passe
+async function deriveKey(password, salt, iterations) {
+  if (!crypto.subtle) throw new Error("Chiffrement indisponible ici : ouvre la page en https (GitHub Pages).");
+  const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey({ name: "PBKDF2", salt, iterations, hash: "SHA-256" },
+    base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+}
+
+// Chiffre la clé API -> contenu de key.enc.json
+async function encryptApiKey(apiKeyText, password) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const k = await deriveKey(password, salt, KDF_ITERATIONS);
+  const data = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, k, new TextEncoder().encode(apiKeyText));
+  return { v: 1, kdf: "PBKDF2-SHA256", iterations: KDF_ITERATIONS, salt: b64(salt), iv: b64(iv), data: b64(data) };
+}
+
+// Déchiffre key.enc.json (erreur si mauvais mot de passe)
+async function decryptApiKey(enc, password) {
+  const k = await deriveKey(password, unb64(enc.salt), enc.iterations);
+  const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: unb64(enc.iv) }, k, unb64(enc.data));
+  return new TextDecoder().decode(plain);
+}
+
+// Cherche key.enc.json à côté de la page (absent en local ou si pas encore ajouté)
+let encryptedKey = null;
+async function loadEncryptedKey() {
+  try {
+    const r = await fetch("key.enc.json", { cache: "no-store" });
+    if (r.ok) encryptedKey = await r.json();
+  } catch {}
+  $("unlockBox").hidden = !encryptedKey;
+}
+
 // ---------- Utilitaires ----------
 function fmt(d) { return d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", timeZone: "Pacific/Auckland" }); }
 function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
@@ -507,6 +575,47 @@ $("keySave").onclick = () => {
   $("keyBox").open = false;
   refresh();
 };
+$("keyForget").onclick = () => {
+  apiKey = "";
+  try { localStorage.removeItem("metlink_key"); } catch {}
+  $("keyInput").value = "";
+  $("keyBox").open = true;
+  refresh();
+};
+$("unlockBtn").onclick = async () => {
+  if (!encryptedKey) return;
+  $("unlockMsg").textContent = "Déverrouillage…";
+  try {
+    apiKey = await decryptApiKey(encryptedKey, $("unlockPass").value);
+    store.set("metlink_key", apiKey);
+    $("unlockPass").value = "";
+    $("unlockMsg").textContent = "";
+    $("keyBox").open = false;
+    refresh();
+  } catch {
+    $("unlockMsg").innerHTML = '<span class="err">Mot de passe incorrect.</span>';
+  }
+};
+$("unlockPass").addEventListener("keydown", e => { if (e.key === "Enter") $("unlockBtn").click(); });
+$("encBtn").onclick = async () => {
+  const key = $("encKey").value.trim(), p1 = $("encPass").value, p2 = $("encPass2").value;
+  const msg = $("encMsg");
+  if (!key) { msg.textContent = "Entre la clé API."; return; }
+  if (p1.length < 12) { msg.textContent = "Mot de passe trop court (12 caractères minimum)."; return; }
+  if (p1 !== p2) { msg.textContent = "Les deux mots de passe sont différents."; return; }
+  msg.textContent = "Chiffrement…";
+  const enc = await encryptApiKey(key, p1);
+  // Vérification : on relit avec le même mot de passe
+  if (await decryptApiKey(enc, p1) !== key) { msg.textContent = "Erreur de chiffrement, réessaie."; return; }
+  $("encOut").value = JSON.stringify(enc);
+  $("encOut").hidden = $("encCopy").hidden = false;
+  $("encKey").value = $("encPass").value = $("encPass2").value = "";
+  msg.textContent = "Voici le contenu de key.enc.json. Tu peux le copier et me l'envoyer : il est illisible sans ton mot de passe.";
+};
+$("encCopy").onclick = async () => {
+  try { await navigator.clipboard.writeText($("encOut").value); $("encCopy").textContent = "Copié ✓"; }
+  catch { $("encOut").select(); }
+};
 $("refreshBtn").onclick = refresh;
 $("cols").addEventListener("click", e => {
   const row = e.target.closest(".dep");
@@ -515,6 +624,7 @@ $("cols").addEventListener("click", e => {
 $("mapClose").onclick = closeMap;
 document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
 
+loadEncryptedKey();
 refresh();
 </script>
 </body>
