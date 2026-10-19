@@ -43,9 +43,14 @@
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
   details { margin: 8px 0 12px; }
   details summary { cursor: pointer; color: var(--muted); font-size: .9rem; }
-  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-  @media (max-width: 520px) { .cols { gap: 8px; } .card { padding: 10px; } }
-  .col h2 { font-size: 1.15rem; margin: 0; }
+  .tabs { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; margin-bottom: 8px; }
+  .tab { display: flex; align-items: baseline; justify-content: center; gap: 6px; padding: 10px;
+    background: var(--card); color: var(--muted); border: 1px solid var(--line); }
+  .tab b { font-size: 1rem; }
+  .tab span { font-size: .8rem; }
+  .tab.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+  .col[hidden] { display: none; }
+  @media (max-width: 520px) { .card { padding: 10px; } }
   .col .sub { margin-bottom: 6px; }
   .dep { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: center;
     padding: 10px 0; border-top: 1px solid var(--line); }
@@ -124,6 +129,7 @@
     </details>
   </details>
 
+  <div class="tabs" id="tabs" role="tablist"></div>
   <div class="cols" id="cols"></div>
 
   <section class="card" id="mapCard" hidden>
@@ -147,8 +153,9 @@ const API = "https://api.opendata.metlink.org.nz/v1";
 const REFRESH_MS = 5000;
 const MAX_DEPARTURES = 4;
 const STOPS = [
-  { id: "6080", label: "WETA", lat: -41.31498596, lon: 174.8131054 },
+  // Ordre des onglets ; le premier est sélectionné à l'ouverture
   { id: "7096", label: "MAISON", lat: -41.3343386, lon: 174.8196172 },
+  { id: "6080", label: "WETA", lat: -41.31498596, lon: 174.8131054 },
 ];
 const VEHICLE_REFRESH_MS = 5000;  // le flux GPS Metlink se met à jour environ toutes les 5 s
 const $ = (id) => document.getElementById(id);
@@ -166,14 +173,34 @@ const lastData = {}; // derniers départs reçus, par arrêt
 let routesByShort = null;  // "4" -> { route_id, route_color, ... }
 const shapeCache = {};     // trip_id -> [[lat, lon], ...]
 
-// ---------- Colonnes ----------
+// ---------- Onglets par arrêt ----------
+let activeStop = STOPS[0].id;  // MAISON par défaut
+$("tabs").innerHTML = STOPS.map(s =>
+  `<button class="tab" role="tab" data-stop="${s.id}"><b>${s.label}</b><span>${s.id}</span></button>`).join("");
 $("cols").innerHTML = STOPS.map(s => `
-  <section class="card col">
-    <h2>${s.id} - ${s.label}</h2>
+  <section class="card col" id="col-${s.id}" role="tabpanel">
     <div class="sub" id="name-${s.id}">&nbsp;</div>
     <div class="chips" id="chips-${s.id}"></div>
     <div id="board-${s.id}"><div class="msg">Chargement…</div></div>
   </section>`).join("");
+
+// Affiche l'onglet choisi (les deux arrêts restent rafraîchis pour un changement instantané)
+function showTab(id) {
+  activeStop = id;
+  for (const s of STOPS) {
+    $("col-" + s.id).hidden = s.id !== id;
+    const t = document.querySelector(`.tab[data-stop="${s.id}"]`);
+    t.classList.toggle("on", s.id === id);
+    t.setAttribute("aria-selected", s.id === id);
+  }
+}
+$("tabs").addEventListener("click", e => {
+  const t = e.target.closest(".tab");
+  if (!t) return;
+  if (selected && selected.stopId !== t.dataset.stop) closeMap();
+  showTab(t.dataset.stop);
+});
+showTab(activeStop);
 
 // ---------- Appels API ----------
 async function api(path) {
